@@ -1,0 +1,1 @@
+{"status": "OK", "processed": 1, "dashboard_url": "https://srim-dashboard-prod-564895808421.s3.amazonaws.com/index.html", "results": [{"ticker": "WDAY", "status": "OK", "score": 68, "trend": "DECLINING", "filing": "2026-01-31", "alerted": false, "alert_level": null}]}

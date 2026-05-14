@@ -1,0 +1,10 @@
+{
+  "httpMethod": "GET",
+  "path": "/suppliers",
+  "pathParameters": null,
+  "queryStringParameters": null,
+  "body": null,
+  "headers": {
+    "Accept": "application/json"
+  }
+}

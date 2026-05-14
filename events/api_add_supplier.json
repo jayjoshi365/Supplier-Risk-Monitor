@@ -1,0 +1,10 @@
+{
+  "httpMethod": "POST",
+  "path": "/suppliers",
+  "pathParameters": null,
+  "queryStringParameters": null,
+  "body": "{\"ticker\": \"WDAY\", \"supplier_name\": \"Workday Inc.\", \"category\": \"HR Technology\", \"kraljic_position\": \"Strategic\", \"contract_value_usd\": 480000, \"contract_end_date\": \"2027-03-31\", \"risk_threshold\": 60, \"alert_email\": \"procurement@company.com\"}",
+  "headers": {
+    "Content-Type": "application/json"
+  }
+}

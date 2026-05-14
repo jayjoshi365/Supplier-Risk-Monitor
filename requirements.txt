@@ -1,0 +1,3 @@
+# Lambda runtime dependencies
+# boto3 is pre-installed in the Lambda Python runtime — listed here for local dev clarity
+boto3>=1.34.0

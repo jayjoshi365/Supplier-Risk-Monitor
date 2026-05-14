@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Supplier Risk Intelligence Monitor (SRIM)
+  Continuous financial health monitoring for strategic suppliers via SEC EDGAR.
+  $0/month on AWS Free Tier — Lambda + DynamoDB + EventBridge + SNS + S3.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, prod]
+    Description: Deployment environment
+
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Email address to subscribe to SNS alerts.
+      Leave empty to skip email subscription (configure manually in SNS console).
+
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 8 * * ? *)"
+    Description: >
+      EventBridge schedule for daily supplier assessment run.
+      Default: 08:00 UTC daily. Format: cron(minute hour day month weekday year)
+
+Globals:
+  Function:
+    Timeout: 300          # 5 minutes — generous for EDGAR fetch + DynamoDB writes
+    MemorySize: 512       # 512 MB — adequate for JSON parsing; more = unnecessary cost
+    Runtime: python3.12
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref SuppliersTable
+        SNS_TOPIC_ARN: !Ref AlertTopic
+        S3_BUCKET: !Ref DashboardBucket
+        LOG_LEVEL: INFO
+        POWERTOOLS_SERVICE_NAME: SRIM
+
+Resources:
+
+  # ── Lambda ──────────────────────────────────────────────────────────────────
+  SrimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "srim-${Environment}"
+      CodeUri: src/
+      Handler: lambda_handler.lambda_handler
+      Description: >
+        SRIM orchestrator — scheduled daily run (EventBridge) + REST API (API Gateway).
+        Fetches SEC EDGAR data, scores suppliers, detects trend, fires SNS alerts.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SuppliersTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
+        - S3CrudPolicy:
+            BucketName: !Ref DashboardBucket
+      Events:
+        # Scheduled daily run — EventBridge Scheduler (Challenge 4: serverless scheduling)
+        DailyAssessment:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub "srim-daily-${Environment}"
+            Description: "Daily SRIM supplier risk assessment"
+            ScheduleExpression: !Ref ScheduleExpression
+            ScheduleExpressionTimezone: UTC
+            State: ENABLED
+            RetryPolicy:
+              MaximumRetryAttempts: 2
+              MaximumEventAgeInSeconds: 3600
+
+        # REST API endpoints
+        ApiListSuppliers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers
+            Method: GET
+        ApiAddSupplier:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers
+            Method: POST
+        ApiGetSupplier:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers/{ticker}
+            Method: GET
+        ApiGetBrief:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers/{ticker}/brief
+            Method: GET
+        ApiOverride:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers/{ticker}/override
+            Method: PUT
+        ApiAlertAction:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SrimApi
+            Path: /suppliers/{ticker}/alert-action
+            Method: PUT
+
+  SrimFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/srim-${Environment}"
+      RetentionInDays: 30
+
+  # ── API Gateway ─────────────────────────────────────────────────────────────
+  SrimApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "srim-api-${Environment}"
+      StageName: !Ref Environment
+      Description: "SRIM REST API — supplier watchlist management"
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+
+  # ── DynamoDB ─────────────────────────────────────────────────────────────────
+  SuppliersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain   # Protect watchlist from accidental stack deletion
+    Properties:
+      TableName: !Sub "srim-suppliers-${Environment}"
+      BillingMode: PAY_PER_REQUEST   # Free tier: 25 WCU/RCU; we use <1 WCU/day
+      AttributeDefinitions:
+        - AttributeName: ticker
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ticker
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: SRIM
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── SNS ──────────────────────────────────────────────────────────────────────
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "srim-alerts-${Environment}"
+      DisplayName: "SRIM Supplier Risk Alerts"
+      # Free tier: 1M publishes/month. SRIM uses <20/month.
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ── S3 Static Dashboard ───────────────────────────────────────────────────────
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "srim-dashboard-${Environment}-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      Tags:
+        - Key: Project
+          Value: SRIM
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadDashboard
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${DashboardBucket.Arn}/*"
+
+  # ── CloudWatch Alarms ────────────────────────────────────────────────────────
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "srim-lambda-errors-${Environment}"
+      AlarmDescription: "SRIM Lambda error rate exceeded threshold"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SrimFunction
+      Statistic: Sum
+      Period: 86400           # 1-day window (matches daily run schedule)
+      EvaluationPeriods: 1
+      Threshold: 3            # Alert after 3 failures in one day
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic   # Reuse supplier alert topic for ops alerts
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "srim-lambda-duration-${Environment}"
+      AlarmDescription: "SRIM Lambda approaching timeout"
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SrimFunction
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 240000       # 240s — warns at 80% of 300s timeout
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway base URL"
+    Value: !Sub "https://${SrimApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Export:
+      Name: !Sub "srim-api-url-${Environment}"
+
+  DashboardUrl:
+    Description: "S3 static dashboard URL"
+    Value: !GetAtt DashboardBucket.WebsiteURL
+
+  LambdaArn:
+    Description: "SRIM Lambda function ARN"
+    Value: !GetAtt SrimFunction.Arn
+
+  DynamoDBTable:
+    Description: "DynamoDB table name"
+    Value: !Ref SuppliersTable
+
+  SNSTopicArn:
+    Description: "SNS alert topic ARN"
+    Value: !Ref AlertTopic
+
+  S3Bucket:
+    Description: "Dashboard S3 bucket name"
+    Value: !Ref DashboardBucket

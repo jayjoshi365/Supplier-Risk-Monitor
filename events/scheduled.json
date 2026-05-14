@@ -1,0 +1,8 @@
+{
+  "source": "aws.events",
+  "detail-type": "Scheduled Event",
+  "detail": {},
+  "id": "test-scheduled-event",
+  "region": "us-east-1",
+  "time": "2026-05-14T08:00:00Z"
+}

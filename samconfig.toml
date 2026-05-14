@@ -1,0 +1,29 @@
+# AWS SAM CLI configuration for SRIM
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-config.html
+#
+# Deploy: sam deploy
+# Build:  sam build
+
+version = 0.1
+
+[default.global.parameters]
+stack_name = "srim-prod"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+no_fail_on_empty_changeset = true
+
+[default.deploy.parameters]
+parameter_overrides = "Environment=\"prod\" AlertEmail=\"jayjoshi365@gmail.com\" ScheduleExpression=\"cron(0 8 * * ? *)\""
+# Uncomment to subscribe an email to SNS alerts on first deploy:
+# parameter_overrides = "Environment=prod AlertEmail=procurement@yourcompany.com"
+resolve_s3 = true
+s3_prefix = "srim-prod"
+image_repositories = []
+
+[default.build.parameters]
+use_container = false
+
+[dev.deploy.parameters]
+stack_name = "srim-dev"
+parameter_overrides = "Environment=dev"
